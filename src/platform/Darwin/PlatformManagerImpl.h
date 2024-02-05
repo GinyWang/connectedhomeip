@@ -34,6 +34,10 @@
 
 #include <atomic>
 #include <dispatch/dispatch.h>
+#include <mutex>
+#include <pthread.h>
+
+static constexpr const char * const CHIP_CONTROLLER_QUEUE = "org.csa-iot.matter.framework.controller.workqueue";
 
 namespace chip {
 namespace DeviceLayer {
@@ -75,13 +79,38 @@ private:
     CHIP_ERROR _StopEventLoopTask();
 
     void _RunEventLoop();
-    void _LockChipStack(){};
-    bool _TryLockChipStack() { return false; };
-    void _UnlockChipStack(){};
+    void _LockChipStack()
+    {
+        mLock.lock();
+#if CHIP_STACK_LOCK_TRACKING_ENABLED
+        mChipStackIsLocked = true;
+        mChipStackLockOwnerThread = pthread_self();
+#endif
+    };
+    bool _TryLockChipStack()
+    {
+        bool isLockSuccessful = mLock.try_lock();
+#if CHIP_STACK_LOCK_TRACKING_ENABLED
+        if (isLockSuccessful) {
+           mChipStackIsLocked = true;
+           mChipStackLockOwnerThread = pthread_self();
+        }
+        return isLockSuccessful;
+#endif
+    };
+    void _UnlockChipStack()
+    {
+#if CHIP_STACK_LOCK_TRACKING_ENABLED
+        mChipStackIsLocked = false;
+#endif
+        mLock.unlock();
+    };
     CHIP_ERROR _PostEvent(const ChipDeviceEvent * event);
 #endif // CHIP_SYSTEM_CONFIG_USE_DISPATCH
 
 #if CHIP_STACK_LOCK_TRACKING_ENABLED
+    bool mChipStackIsLocked = false;
+    pthread_t mChipStackLockOwnerThread;
     bool _IsChipStackLockedByCurrentThread() const;
 #endif
 
@@ -110,6 +139,10 @@ private:
 
     // Semaphore used to implement blocking behavior in _RunEventLoop.
     dispatch_semaphore_t mRunLoopSem;
+
+    bool mIsWorkQueueSuspensionPending = false;
+    std::mutex mLock;
+    inline ImplClass * Impl() { return static_cast<PlatformManagerImpl *>(this); }
 };
 
 /**
